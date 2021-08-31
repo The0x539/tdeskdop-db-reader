@@ -12,6 +12,7 @@ use super::{aes_decrypt_local, MtpAuthKey};
 const TDF_MAGIC: [u8; 4] = *b"TDF$";
 
 pub struct FileReadDescriptor {
+    #[allow(dead_code)]
     version: i32,
     data: Cursor<Vec<u8>>,
 }
