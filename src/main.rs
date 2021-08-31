@@ -1,23 +1,22 @@
 #![allow(dead_code)]
 
-use anyhow::{bail, ensure, Context, Result};
-use byteorder::{ReadBytesExt, BE, LE};
+use anyhow::{bail, Context, Result};
 use grammers_crypto::aes;
 use num_enum::TryFromPrimitive;
 use once_cell::sync::Lazy;
 use ring::{digest, pbkdf2};
 use std::collections::HashSet;
 use std::convert::TryInto;
-use std::ffi::OsStr;
 use std::fmt::Write;
-use std::fs::File;
-use std::io::{Cursor, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+mod descriptor;
+use descriptor::{DescriptorStream, EncryptedDescriptor, FileReadDescriptor};
+
 const LOCAL_ENCRYPT_SALT_SIZE: usize = 32;
 const MAX_ACCOUNTS: i32 = 3;
-const TDF_MAGIC: [u8; 4] = *b"TDF$";
 
 fn base_global_path() -> PathBuf {
     let home = std::env::var_os("HOME").unwrap();
@@ -45,60 +44,6 @@ fn compose_data_string(data_name: &str, index: i32) -> String {
         write!(&mut result, "#{}", index + 1).unwrap();
     }
     result
-}
-
-struct FileReadDescriptor {
-    version: i32,
-    data: Cursor<Vec<u8>>,
-}
-
-impl FileReadDescriptor {
-    fn open(name: impl AsRef<OsStr>, base_path: impl AsRef<Path>) -> Result<Self> {
-        let path = base_path.as_ref().join(name.as_ref());
-
-        let modern = {
-            let mut s = path.into_os_string();
-            s.push("s");
-            PathBuf::from(s)
-        };
-
-        let mut f = if modern.exists() {
-            File::open(modern)?
-        } else {
-            // NOTE: tdesktop tries all possible files.
-            // if one is invalid, it tries the next.
-            unimplemented!("modern files only")
-        };
-
-        let mut magic = [0; TDF_MAGIC.len()];
-        f.read_exact(&mut magic)?;
-        if magic != TDF_MAGIC {
-            bail!("bad magic");
-        }
-
-        let version = f.read_i32::<LE>()?;
-
-        let mut bytes = Vec::new();
-        f.read_to_end(&mut bytes)?;
-        let data_size = bytes.len() - 16;
-
-        let mut md5 = md5::Context::new();
-        md5.consume(&bytes[..data_size]);
-        md5.consume(&(data_size as i32).to_le_bytes());
-        md5.consume(&version.to_le_bytes());
-        md5.consume(&magic);
-
-        if md5.compute().0 != &bytes[data_size..] {
-            bail!("signature mismatch");
-        }
-
-        bytes.truncate(data_size);
-
-        Ok(Self {
-            version,
-            data: Cursor::new(bytes),
-        })
-    }
 }
 
 struct MtpAuthKey {
@@ -192,98 +137,6 @@ impl MtpAuthKey {
         let mut key = Self::BLANK;
         reader.read_exact(&mut key.data)?;
         Ok(Rc::new(key))
-    }
-}
-
-struct EncryptedDescriptor {
-    data: Cursor<Vec<u8>>,
-}
-
-impl EncryptedDescriptor {
-    fn decrypt_local(encrypted: &[u8], key: &MtpAuthKey) -> Result<Self> {
-        if encrypted.len() <= 16 || encrypted.len() & 0xF != 0 {
-            bail!("bad encrypted part size");
-        }
-        let full_len = encrypted.len() - 16;
-
-        let (encrypted_key, encrypted_data) = encrypted.split_at(16);
-        let encrypted_key = encrypted_key.try_into().unwrap();
-        let mut decrypted = aes_decrypt_local(encrypted_data, key, encrypted_key);
-
-        let sha = digest::digest(&digest::SHA1_FOR_LEGACY_USE_ONLY, &decrypted);
-        if sha.as_ref()[..16] != encrypted_key[..] {
-            bail!("bad decrypt key");
-        }
-
-        const FOUR: usize = std::mem::size_of::<u32>();
-
-        let data_len = u32::from_le_bytes(decrypted[..4].try_into().unwrap()) as usize;
-        if data_len > decrypted.len() || data_len <= full_len - 16 || data_len < FOUR {
-            bail!("bad decrypted part");
-        }
-
-        decrypted.truncate(data_len);
-
-        let mut data = Cursor::new(decrypted);
-        data.set_position(FOUR as u64);
-        Ok(Self { data })
-    }
-}
-
-trait DescriptorStream {
-    type Buffer: AsRef<[u8]>;
-    fn stream(&self) -> &Cursor<Self::Buffer>;
-    fn stream_mut(&mut self) -> &mut Cursor<Self::Buffer>;
-
-    fn at_end(&self) -> bool {
-        self.stream().position() == self.stream().get_ref().as_ref().len() as u64
-    }
-
-    fn should_be_done(&self) -> Result<()> {
-        let pos = self.stream().position();
-        let len = self.stream().get_ref().as_ref().len() as u64;
-        ensure!(pos == len, "extraneous data: {} bytes", len - pos);
-        Ok(())
-    }
-
-    fn read_u32(&mut self) -> std::io::Result<u32> {
-        self.stream_mut().read_u32::<BE>()
-    }
-
-    fn read_u64(&mut self) -> std::io::Result<u64> {
-        self.stream_mut().read_u64::<BE>()
-    }
-
-    fn read_bytes(&mut self) -> std::io::Result<Vec<u8>> {
-        let len = self.read_u32()? as usize;
-
-        // ?????
-        if len == 0 || len == u32::MAX as usize {
-            return Ok(Vec::new());
-        }
-
-        let mut buf = vec![0; len];
-        self.stream_mut().read_exact(&mut buf)?;
-        Ok(buf)
-    }
-}
-
-impl DescriptorStream for EncryptedDescriptor {
-    type Buffer = Vec<u8>;
-    fn stream(&self) -> &Cursor<Self::Buffer> {
-        &self.data
-    }
-    fn stream_mut(&mut self) -> &mut Cursor<Self::Buffer> {
-        &mut self.data
-    }
-}
-impl DescriptorStream for FileReadDescriptor {
-    type Buffer = Vec<u8>;
-    fn stream(&self) -> &Cursor<Self::Buffer> {
-        &self.data
-    }
-    fn stream_mut(&mut self) -> &mut Cursor<Self::Buffer> {
-        &mut self.data
     }
 }
 
@@ -501,14 +354,14 @@ fn start_modern(passcode: &[u8]) -> Result<()> {
     let passcode_key = MtpAuthKey::create_local(passcode, salt);
 
     let mut key_inner_data = EncryptedDescriptor::decrypt_local(&key_encrypted, &passcode_key)?;
-    let local_key = MtpAuthKey::from_reader(&mut key_inner_data.data)?;
+    let local_key = MtpAuthKey::from_reader(key_inner_data.stream_mut())?;
     key_inner_data
         .should_be_done()
         .context("reading key inner data")?;
 
     let mut info = EncryptedDescriptor::decrypt_local(&info_encrypted, &local_key)?;
 
-    let count = info.data.read_i32::<BE>()?;
+    let count = info.read_i32()?;
     if count <= 0 || count > MAX_ACCOUNTS {
         bail!("bad accounts count");
     }
@@ -517,7 +370,7 @@ fn start_modern(passcode: &[u8]) -> Result<()> {
     //let mut sessions = HashSet::new();
     //let mut active = 0;
     for _ in 0..count {
-        let index = info.data.read_i32::<BE>()?;
+        let index = info.read_i32()?;
         if !(index >= 0 && index < MAX_ACCOUNTS && tried.insert(index)) {
             continue;
         }
