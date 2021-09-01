@@ -64,7 +64,7 @@ impl MainAccount {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Default, Copy, Clone)]
 struct FileKey(u64);
 
 impl FileKey {
@@ -91,12 +91,19 @@ impl FileKey {
     }
 }
 
+#[derive(Default)]
+struct StorageKeys {
+    #[allow(dead_code)]
+    settings: FileKey,
+}
+
 #[allow(dead_code)]
 struct StorageAccount {
     local_key: Rc<MtpAuthKey>,
     data_name_key: FileKey,
     data_name: String,
     base_path: PathBuf,
+    keys: StorageKeys,
 }
 
 impl StorageAccount {
@@ -108,6 +115,7 @@ impl StorageAccount {
             data_name_key,
             base_path,
             data_name,
+            keys: StorageKeys::default(),
         }
     }
 
@@ -135,7 +143,6 @@ impl StorageAccount {
                 .read_u32()?
                 .try_into()
                 .context("unknown key type in encrypted map")?;
-            println!("{:?}", key_type);
             use LocalStorageKey::*;
             match key_type {
                 Draft => {
@@ -165,13 +172,15 @@ impl StorageAccount {
                         drop((key, first, second, size))
                     }
                 }
+                UserSettings => {
+                    self.keys.settings = FileKey(map.read_u64()?);
+                }
                 // these are split in the tdesktop source, but I'm not using them
                 Locations
                 | ReportSpamStatusesOld
                 | TrustedBots
                 | RecentStickersOld
                 | BackgroundOldOld
-                | UserSettings
                 | RecentHashtagsAndBots
                 | StickersOld
                 | FavedStickers
