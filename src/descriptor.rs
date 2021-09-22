@@ -194,6 +194,23 @@ impl Readable for Bytes {
     }
 }
 
+// TODO: reconcile this and DescriptorStream
+pub trait ReadStreamExt: Read {
+    fn read_val<T: Readable>(&mut self) -> std::io::Result<T> {
+        T::read_from(self)
+    }
+    fn skip_val<T: Readable>(&mut self) -> std::io::Result<()> {
+        T::skip_from(self)
+    }
+    fn read_bytes(&mut self) -> std::io::Result<Vec<u8>> {
+        self.read_val::<Bytes>().map(|b| b.0)
+    }
+    fn skip_bytes(&mut self) -> std::io::Result<()> {
+        self.read_bytes().map(drop)
+    }
+}
+impl<T: Read> ReadStreamExt for T {}
+
 pub trait DescriptorStream {
     type Buffer: AsRef<[u8]>;
     fn stream(&self) -> &Cursor<Self::Buffer>;

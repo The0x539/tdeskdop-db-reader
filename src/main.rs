@@ -15,6 +15,8 @@ use crypto::{aes_decrypt_local, MtpAuthKey};
 
 mod settings;
 
+mod schema;
+
 const MAX_ACCOUNTS: i32 = 3;
 
 fn base_global_path() -> PathBuf {
@@ -67,7 +69,7 @@ impl MainAccount {
 }
 
 #[derive(Default, Copy, Clone)]
-struct FileKey(u64);
+pub struct FileKey(u64);
 
 impl FileKey {
     fn compute(data_name: &str) -> Self {
