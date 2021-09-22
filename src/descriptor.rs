@@ -12,7 +12,6 @@ use super::{aes_decrypt_local, MtpAuthKey};
 const TDF_MAGIC: [u8; 4] = *b"TDF$";
 
 pub struct FileReadDescriptor {
-    #[allow(dead_code)]
     version: i32,
     data: Cursor<Vec<u8>>,
 }
@@ -64,6 +63,10 @@ impl FileReadDescriptor {
             data: Cursor::new(bytes),
         })
     }
+
+    pub fn version(&self) -> i32 {
+        self.version
+    }
 }
 
 pub struct EncryptedDescriptor {
@@ -101,6 +104,96 @@ impl EncryptedDescriptor {
     }
 }
 
+pub trait Readable: Sized {
+    fn read_from(stream: impl Read) -> std::io::Result<Self>;
+    fn skip_from(stream: impl Read) -> std::io::Result<()> {
+        Self::read_from(stream).map(drop)
+    }
+}
+
+impl Readable for i32 {
+    fn read_from(mut stream: impl Read) -> std::io::Result<Self> {
+        stream.read_i32::<BE>()
+    }
+}
+impl Readable for i64 {
+    fn read_from(mut stream: impl Read) -> std::io::Result<Self> {
+        stream.read_i64::<BE>()
+    }
+}
+impl Readable for u16 {
+    fn read_from(mut stream: impl Read) -> std::io::Result<Self> {
+        stream.read_u16::<BE>()
+    }
+}
+impl Readable for u32 {
+    fn read_from(mut stream: impl Read) -> std::io::Result<Self> {
+        stream.read_u32::<BE>()
+    }
+}
+impl Readable for u64 {
+    fn read_from(mut stream: impl Read) -> std::io::Result<Self> {
+        stream.read_u64::<BE>()
+    }
+}
+impl<T: Readable> Readable for Vec<T> {
+    fn read_from(mut stream: impl Read) -> std::io::Result<Self> {
+        let len = u32::read_from(&mut stream)?;
+        let mut v = Vec::with_capacity(len as usize);
+        for _ in 0..len {
+            v.push(T::read_from(&mut stream)?);
+        }
+        Ok(v)
+    }
+    fn skip_from(mut stream: impl Read) -> std::io::Result<()> {
+        let len = u32::read_from(&mut stream)?;
+        for _ in 0..len {
+            T::skip_from(&mut stream)?;
+        }
+        Ok(())
+    }
+}
+impl<A: Readable, B: Readable> Readable for (A, B) {
+    fn read_from(mut stream: impl Read) -> std::io::Result<Self> {
+        Ok((A::read_from(&mut stream)?, B::read_from(&mut stream)?))
+    }
+}
+impl<A: Readable, B: Readable, C: Readable> Readable for (A, B, C) {
+    fn read_from(mut stream: impl Read) -> std::io::Result<Self> {
+        Ok((
+            A::read_from(&mut stream)?,
+            B::read_from(&mut stream)?,
+            C::read_from(&mut stream)?,
+        ))
+    }
+}
+impl<A: Readable, B: Readable, C: Readable, D: Readable> Readable for (A, B, C, D) {
+    fn read_from(mut stream: impl Read) -> std::io::Result<Self> {
+        Ok((
+            A::read_from(&mut stream)?,
+            B::read_from(&mut stream)?,
+            C::read_from(&mut stream)?,
+            D::read_from(&mut stream)?,
+        ))
+    }
+}
+
+pub struct Bytes(pub Vec<u8>);
+impl Readable for Bytes {
+    fn read_from(mut stream: impl Read) -> std::io::Result<Self> {
+        let len = u32::read_from(&mut stream)? as usize;
+
+        // ?????
+        if len == 0 || len == u32::MAX as usize {
+            return Ok(Self(Vec::new()));
+        }
+
+        let mut buf = vec![0; len];
+        stream.read_exact(&mut buf)?;
+        Ok(Self(buf))
+    }
+}
+
 pub trait DescriptorStream {
     type Buffer: AsRef<[u8]>;
     fn stream(&self) -> &Cursor<Self::Buffer>;
@@ -117,29 +210,36 @@ pub trait DescriptorStream {
         Ok(())
     }
 
+    fn read<T: Readable>(&mut self) -> std::io::Result<T> {
+        T::read_from(self.stream_mut())
+    }
+
+    fn skip<T: Readable>(&mut self) -> std::io::Result<()> {
+        T::skip_from(self.stream_mut())
+    }
+
     fn read_i32(&mut self) -> std::io::Result<i32> {
-        self.stream_mut().read_i32::<BE>()
+        self.read()
+    }
+
+    fn read_i64(&mut self) -> std::io::Result<i64> {
+        self.read()
     }
 
     fn read_u32(&mut self) -> std::io::Result<u32> {
-        self.stream_mut().read_u32::<BE>()
+        self.read()
     }
 
     fn read_u64(&mut self) -> std::io::Result<u64> {
-        self.stream_mut().read_u64::<BE>()
+        self.read()
     }
 
     fn read_bytes(&mut self) -> std::io::Result<Vec<u8>> {
-        let len = self.read_u32()? as usize;
+        self.read::<Bytes>().map(|b| b.0)
+    }
 
-        // ?????
-        if len == 0 || len == u32::MAX as usize {
-            return Ok(Vec::new());
-        }
-
-        let mut buf = vec![0; len];
-        self.stream_mut().read_exact(&mut buf)?;
-        Ok(buf)
+    fn skip_bytes(&mut self) -> std::io::Result<()> {
+        self.read_bytes().map(drop)
     }
 }
 

@@ -15,7 +15,11 @@ impl MtpAuthKey {
     pub(crate) const BLANK: Self = Self {
         data: [0; Self::K_SIZE],
     };
+
+    const STRONG_ITERATIONS_COUNT: u32 = 100_000;
     const LOCAL_ENCRYPT_ITER_COUNT: u32 = 4000;
+    const LOCAL_ENCRYPT_NO_PWD_ITER_COUNT: u32 = 4;
+
     pub fn create_local(passcode: &[u8], salt: &[u8; LOCAL_ENCRYPT_SALT_SIZE]) -> Rc<Self> {
         let mut key = Self::BLANK;
         let hash = {
@@ -28,7 +32,7 @@ impl MtpAuthKey {
         let iterations = if passcode.is_empty() {
             1
         } else {
-            Self::LOCAL_ENCRYPT_ITER_COUNT
+            Self::STRONG_ITERATIONS_COUNT
         };
 
         pbkdf2::derive(
@@ -39,6 +43,23 @@ impl MtpAuthKey {
             &mut key.data,
         );
 
+        Rc::new(key)
+    }
+
+    pub fn create_legacy_local(passcode: &[u8], salt: &[u8; LOCAL_ENCRYPT_SALT_SIZE]) -> Rc<Self> {
+        let mut key = Self::BLANK;
+        let iterations = if passcode.is_empty() {
+            Self::LOCAL_ENCRYPT_NO_PWD_ITER_COUNT
+        } else {
+            Self::LOCAL_ENCRYPT_ITER_COUNT
+        };
+        pbkdf2::derive(
+            pbkdf2::PBKDF2_HMAC_SHA1,
+            iterations.try_into().unwrap(),
+            salt,
+            passcode,
+            &mut key.data,
+        );
         Rc::new(key)
     }
 

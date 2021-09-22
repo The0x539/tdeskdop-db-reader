@@ -8,6 +8,7 @@ edition = "2018"
 [dependencies]
 anyhow = "1.0.43"
 byteorder = "1.4.3"
+dirs = "4.0.0"
 grammers-crypto = "0.3.0"
 md5 = "0.7.0"
 num_enum = "0.5.4"
