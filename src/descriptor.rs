@@ -70,6 +70,12 @@ impl FileReadDescriptor {
     }
 }
 
+impl Read for FileReadDescriptor {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        Read::read(&mut self.data, buf)
+    }
+}
+
 pub struct EncryptedDescriptor {
     data: Cursor<Vec<u8>>,
 }
@@ -102,6 +108,12 @@ impl EncryptedDescriptor {
         let mut data = Cursor::new(decrypted);
         data.set_position(FOUR as u64);
         Ok(Self { data })
+    }
+}
+
+impl Read for EncryptedDescriptor {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.data.read(buf)
     }
 }
 
@@ -209,14 +221,9 @@ impl Readable for Bytes {
     }
 }
 
-// TODO: reconcile this and DescriptorStream
-pub trait ReadStreamExt: Read {
-    fn read_val<T: Readable>(&mut self) -> std::io::Result<T> {
-        T::read_from(self)
-    }
-    fn skip_val<T: Readable>(&mut self) -> std::io::Result<()> {
-        T::skip_from(self)
-    }
+pub trait ValueStream {
+    fn read_val<T: Readable>(&mut self) -> std::io::Result<T>;
+    fn skip_val<T: Readable>(&mut self) -> std::io::Result<()>;
     fn read_bytes(&mut self) -> std::io::Result<Vec<u8>> {
         self.read_val::<Bytes>().map(|b| b.0)
     }
@@ -224,72 +231,44 @@ pub trait ReadStreamExt: Read {
         self.read_bytes().map(drop)
     }
 }
-impl<T: Read> ReadStreamExt for T {}
 
-pub trait DescriptorStream {
-    type Buffer: AsRef<[u8]>;
-    fn stream(&self) -> &Cursor<Self::Buffer>;
-    fn stream_mut(&mut self) -> &mut Cursor<Self::Buffer>;
+impl<R: Read> ValueStream for R {
+    fn read_val<T: Readable>(&mut self) -> std::io::Result<T> {
+        T::read_from(self)
+    }
 
-    fn at_end(&self) -> bool {
-        self.stream().position() == self.stream().get_ref().as_ref().len() as u64
+    fn skip_val<T: Readable>(&mut self) -> std::io::Result<()> {
+        T::skip_from(self)
+    }
+}
+
+pub trait StreamWithEnd {
+    fn is_done(&self) -> bool;
+    fn should_be_done(&self) -> Result<()>;
+}
+
+impl StreamWithEnd for FileReadDescriptor {
+    fn is_done(&self) -> bool {
+        self.data.position() == self.data.get_ref().len() as u64
     }
 
     fn should_be_done(&self) -> Result<()> {
-        let pos = self.stream().position();
-        let len = self.stream().get_ref().as_ref().len() as u64;
+        let pos = self.data.position();
+        let len = self.data.get_ref().len() as u64;
         ensure!(pos == len, "extraneous data: {} bytes", len - pos);
         Ok(())
     }
-
-    fn read<T: Readable>(&mut self) -> std::io::Result<T> {
-        T::read_from(self.stream_mut())
-    }
-
-    fn skip<T: Readable>(&mut self) -> std::io::Result<()> {
-        T::skip_from(self.stream_mut())
-    }
-
-    fn read_i32(&mut self) -> std::io::Result<i32> {
-        self.read()
-    }
-
-    fn read_i64(&mut self) -> std::io::Result<i64> {
-        self.read()
-    }
-
-    fn read_u32(&mut self) -> std::io::Result<u32> {
-        self.read()
-    }
-
-    fn read_u64(&mut self) -> std::io::Result<u64> {
-        self.read()
-    }
-
-    fn read_bytes(&mut self) -> std::io::Result<Vec<u8>> {
-        self.read::<Bytes>().map(|b| b.0)
-    }
-
-    fn skip_bytes(&mut self) -> std::io::Result<()> {
-        self.read_bytes().map(drop)
-    }
 }
 
-impl DescriptorStream for EncryptedDescriptor {
-    type Buffer = Vec<u8>;
-    fn stream(&self) -> &Cursor<Self::Buffer> {
-        &self.data
+impl StreamWithEnd for EncryptedDescriptor {
+    fn is_done(&self) -> bool {
+        self.data.position() == self.data.get_ref().len() as u64
     }
-    fn stream_mut(&mut self) -> &mut Cursor<Self::Buffer> {
-        &mut self.data
-    }
-}
-impl DescriptorStream for FileReadDescriptor {
-    type Buffer = Vec<u8>;
-    fn stream(&self) -> &Cursor<Self::Buffer> {
-        &self.data
-    }
-    fn stream_mut(&mut self) -> &mut Cursor<Self::Buffer> {
-        &mut self.data
+
+    fn should_be_done(&self) -> Result<()> {
+        let pos = self.data.position();
+        let len = self.data.get_ref().len() as u64;
+        ensure!(pos == len, "extraneous data: {} bytes", len - pos);
+        Ok(())
     }
 }

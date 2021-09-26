@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 mod descriptor;
-use descriptor::{DescriptorStream, EncryptedDescriptor, FileReadDescriptor};
+use descriptor::{EncryptedDescriptor, FileReadDescriptor, StreamWithEnd, ValueStream};
 
 mod crypto;
 use crypto::{aes_decrypt_local, MtpAuthKey};
@@ -145,42 +145,42 @@ impl StorageAccount {
 
         let mut map = EncryptedDescriptor::decrypt_local(&map_encrypted, &self.local_key)?;
 
-        while !map.at_end() {
+        while !map.is_done() {
             let key_type: LocalStorageKey = map
-                .read_u32()?
+                .read_val::<u32>()?
                 .try_into()
                 .context("unknown key type in encrypted map")?;
             use LocalStorageKey::*;
             match key_type {
                 Draft => {
-                    let count = map.read_u32()?;
+                    let count = map.read_val::<u32>()?;
                     for _ in 0..count {
-                        let _key = FileKey(map.read_u64()?);
-                        let _peer_id_serialized = map.read_u64()?;
+                        let _key = FileKey(map.read_val::<u64>()?);
+                        let _peer_id_serialized = map.read_val::<u64>()?;
                     }
                 }
                 SelfSerialized => {
                     let _ = map.read_bytes()?;
                 }
                 DraftPosition => {
-                    let count = map.read_u32()?;
+                    let count = map.read_val::<u32>()?;
                     for _ in 0..count {
-                        let _key = FileKey(map.read_u64()?);
-                        let _peer_id_serialized = map.read_u64()?;
+                        let _key = FileKey(map.read_val::<u64>()?);
+                        let _peer_id_serialized = map.read_val::<u64>()?;
                     }
                 }
                 LegacyImages | LegacyStickerImages | LegacyAudios => {
-                    let count = map.read_u32()?;
+                    let count = map.read_val::<u32>()?;
                     for _ in 0..count {
-                        let key = FileKey(map.read_u64()?);
-                        let (first, second) = (map.read_u64()?, map.read_u64()?);
-                        let size = map.read_u32()?;
+                        let key = FileKey(map.read_val()?);
+                        let (first, second) = map.read_val::<(u64, u64)>()?;
+                        let size = map.read_val::<u32>()?;
                         // ignore the key
                         drop((key, first, second, size))
                     }
                 }
                 UserSettings => {
-                    self.keys.settings = FileKey(map.read_u64()?);
+                    self.keys.settings = FileKey(map.read_val()?);
                 }
                 // these are split in the tdesktop source, but I'm not using them
                 Locations
@@ -194,27 +194,11 @@ impl StorageAccount {
                 | SavedGifsOld
                 | SavedGifs
                 | SavedPeersOld
-                | ExportSettings => {
-                    let _ = map.read_u64()?;
-                }
-                BackgroundOld => {
-                    let _ = map.read_u64()?;
-                    let _ = map.read_u64()?;
-                }
-                StickersKeys => {
-                    let _installed_stickers_key = map.read_u64()?;
-                    let _featured_stickers_key = map.read_u64()?;
-                    let _recent_stickers_key = map.read_u64()?;
-                    let _archived_stickers_key = map.read_u64()?;
-                }
-                MasksKeys => {
-                    let _installed_masks_key = map.read_u64()?;
-                    let _recent_masks_key = map.read_u64()?;
-                    let _archived_masks_key = map.read_u64()?;
-                }
-                UserMap => {
-                    bail!("UserMap");
-                }
+                | ExportSettings => map.skip_val::<u64>()?,
+                BackgroundOld => map.skip_val::<(u64, u64)>()?,
+                StickersKeys => map.skip_val::<(u64, u64, u64, u64)>()?,
+                MasksKeys => map.skip_val::<(u64, u64, u64)>()?,
+                UserMap => bail!("UserMap"),
             }
         }
 
@@ -285,14 +269,14 @@ fn start_modern(passcode: &[u8]) -> Result<()> {
     let passcode_key = MtpAuthKey::create_local(passcode, salt);
 
     let mut key_inner_data = EncryptedDescriptor::decrypt_local(&key_encrypted, &passcode_key)?;
-    let local_key = MtpAuthKey::from_reader(key_inner_data.stream_mut())?;
+    let local_key = key_inner_data.read_val::<Rc<MtpAuthKey>>()?;
     key_inner_data
         .should_be_done()
         .context("reading key inner data")?;
 
     let mut info = EncryptedDescriptor::decrypt_local(&info_encrypted, &local_key)?;
 
-    let count = info.read_i32()?;
+    let count = info.read_val::<i32>()?;
     if count <= 0 || count > MAX_ACCOUNTS {
         bail!("bad accounts count");
     }
@@ -302,7 +286,7 @@ fn start_modern(passcode: &[u8]) -> Result<()> {
     //let mut active = 0;
     let mut accounts = HashMap::new();
     for _ in 0..count {
-        let index = info.read_i32()?;
+        let index = info.read_val::<i32>()?;
         if !(index >= 0 && index < MAX_ACCOUNTS && tried.insert(index)) {
             continue;
         }
@@ -326,8 +310,8 @@ fn start_local_storage() -> Result<()> {
     let settings_key = MtpAuthKey::create_legacy_local(b"", &salt);
     let mut settings = EncryptedDescriptor::decrypt_local(&settings_encrypted, &settings_key)?;
 
-    while !settings.at_end() {
-        let setting = settings.read::<Setting>()?;
+    while !settings.is_done() {
+        let setting = settings.read_val::<Setting>()?;
         match setting {
             Setting::ThemeKey {
                 day,
@@ -401,21 +385,21 @@ fn read_theme_using_key(key: FileKey, auth_key: &MtpAuthKey) -> Result<SavedThem
     let mut result = SavedTheme::default();
     let (object, cache) = (&mut result.object, &mut result.cache);
     object.content = theme.read_bytes()?;
-    let tag = theme.read::<String>()?;
-    object.path_absolute = theme.read()?;
+    let tag = theme.read_val::<String>()?;
+    object.path_absolute = theme.read_val()?;
 
     let field1: i32;
     let field2: u32;
 
     let is_new_tag = tag == THEME_NEW_PATH_RELATIVE_TAG;
     if is_new_tag {
-        object.path_relative = theme.read()?;
-        object.cloud.id = theme.read()?;
-        object.cloud.access_hash = theme.read()?;
-        object.cloud.slug = theme.read()?;
-        object.cloud.title = theme.read()?;
-        object.cloud.document_id = theme.read()?;
-        field1 = theme.read()?;
+        object.path_relative = theme.read_val()?;
+        object.cloud.id = theme.read_val()?;
+        object.cloud.access_hash = theme.read_val()?;
+        object.cloud.slug = theme.read_val()?;
+        object.cloud.title = theme.read_val()?;
+        object.cloud.document_id = theme.read_val()?;
+        field1 = theme.read_val()?;
     } else {
         object.path_relative = tag;
         field1 = 0;
@@ -447,11 +431,11 @@ fn read_theme_using_key(key: FileKey, auth_key: &MtpAuthKey) -> Result<SavedThem
         }
     }
 
-    let cache_palette_checksum = theme.read::<i32>()?;
-    let cache_content_checksum = theme.read::<i32>()?;
+    let cache_palette_checksum = theme.read_val::<i32>()?;
+    let cache_content_checksum = theme.read_val::<i32>()?;
     let cache_colors = theme.read_bytes()?;
     let cache_background = theme.read_bytes()?;
-    field2 = theme.read()?;
+    field2 = theme.read_val()?;
 
     if !ignore_cache {
         *cache = CachedTheme {

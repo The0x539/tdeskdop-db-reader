@@ -1,4 +1,4 @@
-use crate::descriptor::{ReadStreamExt, Readable};
+use crate::descriptor::{Readable, ValueStream};
 use crate::FileKey;
 use num_enum::TryFromPrimitive;
 use std::convert::TryInto;

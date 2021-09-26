@@ -4,6 +4,8 @@ use std::convert::TryInto;
 use std::io::Read;
 use std::rc::Rc;
 
+use crate::descriptor::Readable;
+
 const LOCAL_ENCRYPT_SALT_SIZE: usize = 32;
 
 pub struct MtpAuthKey {
@@ -113,10 +115,12 @@ impl MtpAuthKey {
         aes_iv[20..24].copy_from_slice(&c[16..20]);
         aes_iv[24..32].copy_from_slice(&d[0..8]);
     }
+}
 
-    pub fn from_reader<R: Read>(mut reader: R) -> std::io::Result<Rc<Self>> {
-        let mut key = Self::BLANK;
-        reader.read_exact(&mut key.data)?;
+impl Readable for Rc<MtpAuthKey> {
+    fn read_from(mut stream: impl Read) -> std::io::Result<Self> {
+        let mut key = MtpAuthKey::BLANK;
+        stream.read_exact(&mut key.data)?;
         Ok(Rc::new(key))
     }
 }
