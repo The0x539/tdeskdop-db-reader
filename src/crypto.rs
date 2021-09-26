@@ -72,39 +72,26 @@ impl MtpAuthKey {
         aes_iv: &mut [u8; 32],
         send: bool,
     ) {
-        let x = if send { 0 } else { 8 };
-        let data = &self.data[x..];
+        fn sha1_of_parts(parts: &[&[u8]]) -> digest::Digest {
+            let mut ctx = digest::Context::new(&digest::SHA1_FOR_LEGACY_USE_ONLY);
+            for part in parts {
+                ctx.update(part);
+            }
+            ctx.finish()
+        }
 
-        let new_sha = || digest::Context::new(&digest::SHA1_FOR_LEGACY_USE_ONLY);
-        let mut sha;
+        let data = if send {
+            &self.data[0..128]
+        } else {
+            &self.data[8..136]
+        };
 
-        sha = new_sha();
-        sha.update(msg_key);
-        sha.update(&data[0..32]);
-        let sha1_a = sha.finish();
+        let a = sha1_of_parts(&[msg_key, &data[0..32]]);
+        let b = sha1_of_parts(&[&data[32..48], msg_key, &data[48..64]]);
+        let c = sha1_of_parts(&[&data[64..96], msg_key]);
+        let d = sha1_of_parts(&[msg_key, &data[96..128]]);
 
-        sha = new_sha();
-        sha.update(&data[32..48]);
-        sha.update(msg_key);
-        sha.update(&data[48..64]);
-        let sha1_b = sha.finish();
-
-        sha = new_sha();
-        sha.update(&data[64..96]);
-        sha.update(msg_key);
-        let sha1_c = sha.finish();
-
-        sha = new_sha();
-        sha.update(msg_key);
-        sha.update(&data[96..128]);
-        let sha1_d = sha.finish();
-
-        let (a, b, c, d) = (
-            sha1_a.as_ref(),
-            sha1_b.as_ref(),
-            sha1_c.as_ref(),
-            sha1_d.as_ref(),
-        );
+        let [a, b, c, d] = [&a, &b, &c, &d].map(AsRef::as_ref);
 
         aes_key[0..8].copy_from_slice(&a[0..8]);
         aes_key[8..20].copy_from_slice(&b[8..20]);
