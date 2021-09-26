@@ -140,6 +140,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "encoding_rs"
+version = "0.8.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80df024fbc5ac80f87dfef0d9f5209a252f2a497f7f42944cff24d8253cac065"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -406,6 +415,7 @@ dependencies = [
  "anyhow",
  "byteorder",
  "dirs",
+ "encoding_rs",
  "grammers-crypto",
  "md5",
  "num_enum",

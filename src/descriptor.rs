@@ -64,6 +64,7 @@ impl FileReadDescriptor {
         })
     }
 
+    #[allow(dead_code)]
     pub fn version(&self) -> i32 {
         self.version
     }
@@ -151,6 +152,20 @@ impl<T: Readable> Readable for Vec<T> {
             T::skip_from(&mut stream)?;
         }
         Ok(())
+    }
+}
+impl Readable for String {
+    fn read_from(mut stream: impl Read) -> std::io::Result<Self> {
+        let bytes = Bytes::read_from(&mut stream)?.0;
+        let result = encoding_rs::UTF_16BE.decode(&bytes);
+        if result.2 {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid UTF-16",
+            ))
+        } else {
+            Ok(result.0.into_owned())
+        }
     }
 }
 impl<A: Readable, B: Readable> Readable for (A, B) {
