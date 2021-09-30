@@ -319,7 +319,9 @@ fn start_local_storage() -> Result<()> {
                 night_mode,
             } => {
                 let key = if night_mode { night } else { day };
-                println!("{:?}", read_theme_using_key(key, &settings_key)?);
+                let read = read_theme_using_key(key, &settings_key)?;
+                ensure!(!read.object.content.is_empty(), "empty content");
+                initialize_theme(read)?;
             }
             _ => (),
         }
@@ -454,10 +456,64 @@ fn read_theme_using_key(key: FileKey, auth_key: &MtpAuthKey) -> Result<SavedThem
     Ok(result)
 }
 
+fn initialize_theme(saved: SavedTheme) -> Result<()> {
+    initialize_from_saved(saved)?;
+    // TODO: in tdesktop this does "Background()->setThemeObject" upon success
+    Ok(())
+}
+
+fn initialize_from_saved(saved: SavedTheme) -> Result<()> {
+    let editing = read_editing_palette();
+    if editing.is_none() {
+        if let Ok(x) = initialize_from_cache(&saved.object.content, &saved.cache) {
+            return Ok(x);
+        }
+    }
+
+    Ok(())
+}
+
+fn read_editing_palette() -> Option<Vec<u8>> {
+    let mut file = File::open(editing_palette_path()).ok()?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
+fn editing_palette_path() -> PathBuf {
+    settings::working_dir().join("tdata/editing-theme.tdesktop-palette")
+}
+
+// Computed from the string representation of the parsed contents of a file named `colors.palette` in the `lib_ui` submodule.
+const PALETTE_CHECKSUM: i32 = 2074042018;
+
+#[inline]
+const fn dumb_signed(u: u32) -> i32 {
+    i32::from_ne_bytes(u.to_ne_bytes())
+}
+
+fn initialize_from_cache(content: &[u8], cache: &CachedTheme) -> Result<()> {
+    if cache.palette_checksum != PALETTE_CHECKSUM {
+        eprintln!("palette checksum mismatch");
+        bail!("palette checksum mismatch");
+    }
+
+    if cache.content_checksum != dumb_signed(crczoo::crc32(content)) {
+        eprintln!("content checksum mismatch");
+        bail!("content checksum mismatch");
+    }
+
+    if !cache.background.is_empty() {
+        // TODO: stuff with... the background?
+    }
+
+    println!("{:?}", cache.colors);
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     start_local_storage()?;
     start_modern(b"")?;
     Ok(())
 }
-
-// storage/localstorage.cpp:953          || !Window::Theme::Initialize(std::move(read))) {
