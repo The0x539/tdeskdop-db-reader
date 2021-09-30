@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use num_enum::TryFromPrimitive;
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
@@ -19,6 +19,11 @@ mod settings;
 
 mod schema;
 use schema::Setting;
+
+mod color;
+
+mod palette;
+use palette::Palette;
 
 const MAX_ACCOUNTS: i32 = 3;
 
@@ -365,8 +370,8 @@ struct CachedTheme {
     colors: Vec<u8>,
     background: Vec<u8>,
     tiled: bool,
-    palette_checksum: i32,
-    content_checksum: i32,
+    palette_checksum: u32,
+    content_checksum: u32,
 }
 
 #[derive(Debug, Default)]
@@ -433,8 +438,8 @@ fn read_theme_using_key(key: FileKey, auth_key: &MtpAuthKey) -> Result<SavedThem
         }
     }
 
-    let cache_palette_checksum = theme.read_val::<i32>()?;
-    let cache_content_checksum = theme.read_val::<i32>()?;
+    let cache_palette_checksum = theme.read_val::<u32>()?;
+    let cache_content_checksum = theme.read_val::<u32>()?;
     let cache_colors = theme.read_bytes()?;
     let cache_background = theme.read_bytes()?;
     field2 = theme.read_val()?;
@@ -465,8 +470,9 @@ fn initialize_theme(saved: SavedTheme) -> Result<()> {
 fn initialize_from_saved(saved: SavedTheme) -> Result<()> {
     let editing = read_editing_palette();
     if editing.is_none() {
-        if let Ok(x) = initialize_from_cache(&saved.object.content, &saved.cache) {
-            return Ok(x);
+        if let Ok(palette) = initialize_from_cache(&saved.object.content, &saved.cache) {
+            println!("{}", palette);
+            return Ok(());
         }
     }
 
@@ -484,21 +490,13 @@ fn editing_palette_path() -> PathBuf {
     settings::working_dir().join("tdata/editing-theme.tdesktop-palette")
 }
 
-// Computed from the string representation of the parsed contents of a file named `colors.palette` in the `lib_ui` submodule.
-const PALETTE_CHECKSUM: i32 = 2074042018;
-
-#[inline]
-const fn dumb_signed(u: u32) -> i32 {
-    i32::from_ne_bytes(u.to_ne_bytes())
-}
-
-fn initialize_from_cache(content: &[u8], cache: &CachedTheme) -> Result<()> {
-    if cache.palette_checksum != PALETTE_CHECKSUM {
+fn initialize_from_cache(content: &[u8], cache: &CachedTheme) -> Result<Box<Palette>> {
+    if cache.palette_checksum != Palette::CHECKSUM {
         eprintln!("palette checksum mismatch");
         bail!("palette checksum mismatch");
     }
 
-    if cache.content_checksum != dumb_signed(crczoo::crc32(content)) {
+    if cache.content_checksum != crczoo::crc32(content) {
         eprintln!("content checksum mismatch");
         bail!("content checksum mismatch");
     }
@@ -507,9 +505,18 @@ fn initialize_from_cache(content: &[u8], cache: &CachedTheme) -> Result<()> {
         // TODO: stuff with... the background?
     }
 
-    println!("{:?}", cache.colors);
+    const PALETTE_SIZE: usize = std::mem::size_of::<Palette>();
+    let color_data: Box<[u8; PALETTE_SIZE]> = cache
+        .colors
+        .clone()
+        .into_boxed_slice()
+        .try_into()
+        .map_err(|_| anyhow!("bad palette data size"))?;
+    let palette = Palette::load_from_cache(color_data);
 
-    Ok(())
+    // TODO: "apply the background"
+
+    Ok(palette)
 }
 
 fn main() -> Result<()> {
